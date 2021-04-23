@@ -157,6 +157,10 @@ void            uartputc(int);
 void            uartputc_sync(int);
 int             uartgetc(void);
 
+//vmcopyin.c
+int copyin_new(pagetable_t, char*, uint64, uint64);
+int copyinstr_new(pagetable_t, char* , uint64, uint64);
+
 // vm.c
 void            kvminit(void);
 void            kvminithart(void);
@@ -182,6 +186,7 @@ void            vmprint(pagetable_t);
 pagetable_t     ukvminit(void);
 void            ukvmmap(pagetable_t, uint64, uint64, uint64, int);
 void            freewalkpagetable(pagetable_t);
+int             uvmcopy_to_ukvm(pagetable_t, pagetable_t , uint64 , uint64);
 
 // plic.c
 void            plicinit(void);
