@@ -3,8 +3,11 @@
 #include "memlayout.h"
 #include "elf.h"
 #include "riscv.h"
+#include "spinlock.h"
+#include "proc.h"
 #include "defs.h"
 #include "fs.h"
+
 
 /*
  * the kernel's page table.
@@ -46,6 +49,40 @@ kvminit()
   // the highest virtual address in the kernel.
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
+
+pagetable_t
+ukvminit()
+{
+  pagetable_t kpt = uvmcreate();
+
+  if (kpt == 0) {
+    return 0;
+  }
+  // uart registers
+  ukvmmap(kpt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  ukvmmap(kpt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  ukvmmap(kpt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  ukvmmap(kpt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  ukvmmap(kpt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  ukvmmap(kpt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  ukvmmap(kpt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kpt;
+}
+
 
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
@@ -121,6 +158,15 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
     panic("kvmmap");
 }
 
+// add a mapping to the per process's kernel page table.
+// does not flush TLB or enable paging.
+void
+ukvmmap(pagetable_t kpt, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kpt, va, sz, pa, perm) != 0)
+    panic("kvmmap");
+}
+
 // translate a kernel virtual address to
 // a physical address. only needed for
 // addresses on the stack.
@@ -132,7 +178,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc() -> kpagetable , va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -288,6 +334,31 @@ freewalk(pagetable_t pagetable)
   }
   kfree((void*)pagetable);
 }
+
+// Recursively free page-table pages.
+// All leaf mappings not need to be removed.
+void
+freewalkpagetabledfs(pagetable_t pagetable, int level)
+{ 
+  if (level >=4) {
+    return;
+  }
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V)){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freewalkpagetabledfs((pagetable_t)child, level + 1);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+void freewalkpagetable(pagetable_t pagetable) {
+  freewalkpagetabledfs(pagetable, 1);
+} 
 
 void  
 vmprintdfs(pagetable_t pagetable, int depth) 
