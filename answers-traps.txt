@@ -1,0 +1,19 @@
+
+1. a1, a2 to a7 holds function parameters 
+
+2. no calling , just use inline function, computed directly by li a1, 12
+
+3. the address is in 0000000000000630
+
+4. The next instruction of main : 0x38
+
+5. The ouput is HE110 World, 
+    r: 72, l: 6C, d: 64
+    rld = 726C64
+
+    if it is big-endian, set i to 0x00726c64
+    we don't need to x, no matter it is big-endian or little-endian 
+
+6. depends on the value on param register 
+
+
