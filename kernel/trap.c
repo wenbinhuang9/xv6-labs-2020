@@ -29,6 +29,34 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+uint64 vmlazyalloc(uint64 va) {
+      //Steal code from uvmalloc() in vm.c, which is what sbrk() calls (via growproc()).
+      // You'll need to call kalloc() and mappages().
+      struct proc* p = myproc();
+      
+      if (va >= p->sz) {
+        return 0;
+      }
+
+      if (uvm_guardpage(p->pagetable, va) == 1) {
+        printf("stackoverflow");
+        return 0; 
+      }
+
+      char *mem; 
+      mem = kalloc();
+      if(mem == 0){
+        //todo 
+        return 0;
+      }
+      memset(mem, 0, PGSIZE);
+      uint64 a = PGROUNDDOWN(va);
+      if(mappages(p->pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+          return 0; 
+      }
+      //printf("mem allocated va %p, pa %p\n", va, (uint64)mem);
+      return (uint64)mem;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -68,9 +96,26 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    //check whether a fault is a page fault by seeing if r_scause() is 13 or 15 in usertrap().
+    if (r_scause() == 15 || r_scause() == 13) {
+      //r_stval() returns the RISC-V stval register
+      //which contains the virtual address that caused the page fault.
+      uint64 va = r_stval();
+
+      if (vmlazyalloc(va) <= 0) {
+        p->killed = 1;
+      }
+
+      if(p->killed == 1) {
+        exit(-1);
+      }
+
+    }else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
+
   }
 
   if(p->killed)

@@ -47,9 +47,19 @@ void
 kfree(void *pa)
 {
   struct run *r;
-
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  
+  //if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP) {
+  if(((uint64)pa % PGSIZE) != 0 || (uint64)pa >= PHYSTOP) {
+    printf("pa is %p", pa);
+    if(((uint64)pa % PGSIZE) != 0) {
+      panic("pa not divided by pagesize kfree"); 
+    } else if ((char*)pa < end) {
+      panic("pa smaller than end"); 
+    }else {
+      panic("pa bigger than end"); 
+    }
     panic("kfree");
+  }
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
