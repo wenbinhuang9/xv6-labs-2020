@@ -8,6 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct trapframe; 
 
 // bio.c
 void            binit(void);
@@ -145,6 +146,7 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+void            switch_trapframe(struct trapframe* src, struct trapframe* dest );
 
 // uart.c
 void            uartinit(void);

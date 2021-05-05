@@ -33,6 +33,47 @@ trapinithart(void)
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
+
+extern char trapframe_alarm[512];
+
+void switch_trapframe(struct trapframe* src, struct trapframe* dest ) {
+        dest->kernel_hartid = src->kernel_hartid;
+        dest->kernel_satp = src->kernel_satp;
+        dest->kernel_sp = src->kernel_sp;
+        dest->kernel_trap = src->kernel_trap;
+        dest->epc = src->epc; 
+        dest->ra = src->ra;
+        dest->sp = src->sp;
+        dest->gp = src->gp;
+        dest->tp = src->tp;
+        dest->t0 = src->t0;
+        dest->t1 = src->t1;
+        dest->t2 = src->t2;
+        dest->t3 = src->t3;
+        dest->t4 = src->t4;
+        dest->t5 = src->t5;
+        dest->t6 = src->t6;
+        dest->a0 = src->a0;
+        dest->a1 = src->a1;
+        dest->a2 = src->a2;
+        dest->a3 = src->a3;
+        dest->a4 = src->a4;
+        dest->a5 = src->a5;
+        dest->a6 = src->a6;
+        dest->a7 = src->a7;
+        dest->s0 = src->s0;
+        dest->s1 = src->s1;
+        dest->s2 = src->s2;
+        dest->s3 = src->s3;
+        dest->s4 = src->s4;
+        dest->s5 = src->s5;
+        dest->s6 = src->s6;
+        dest->s7 = src->s7;
+        dest->s8 = src->s8;
+        dest->s9 = src->s9;
+        dest->s10 = src->s10;
+        dest->s11 = src->s11;
+}
 void
 usertrap(void)
 {
@@ -67,6 +108,7 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -77,8 +119,20 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    if (p->alarm_interval != 0) {
+       p->alarm_passed = p->alarm_passed + 1; 
+      // prevent from re-entrance
+      if (p->alarm_passed == p->alarm_interval ) {
+        //save register, register is stored by at most 512 bytes. 
+        memmove(p->alarm_trapframe, p->trapframe, sizeof(struct trapframe));
+        //save data in proc 
+        //reset pc to execute handler  
+        p->trapframe->epc = p->alarm_handler;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
