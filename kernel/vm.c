@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -299,6 +301,54 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+int check_cow(pagetable_t pagetable, uint64 va) {
+  pte_t *pte; 
+
+  pte = walk(pagetable, va, 0);
+
+  if (pte == 0) {
+    return 0;
+  }
+
+  if ( *pte & PTE_COW ) {
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * return 0 if uvmcow fails , otherwise return physcial address 
+ */ 
+
+uint64 
+uvmcow(pagetable_t pagetable, uint64 va){
+  pte_t *pte; 
+  uint64 pa; 
+  //allocate a new page with kalloc()
+  char* mem = (char*) kalloc();
+  if ( mem ==0 ) {
+    //And if there’s no free memory, the process should be killed.
+    return 0; 
+  }
+  if((pte = walk(pagetable, va, 0)) == 0) {
+    panic("uvmcow:walk");
+  }
+
+  pa = PTE2PA(*pte);
+  //copy the old page to the new page
+  memmove(mem, (char*)pa, PGSIZE);
+
+
+  //and install the new page in the PTE with PTE_W set
+  uint64 flags = PTE_FLAGS(*pte);
+  *pte = PA2PTE(mem) | flags | PTE_W;
+  *pte &= ~PTE_COW;
+  //decrement a page’s count each time any process drops the page from its page table
+  kfree((void*)pa);
+  
+  return (uint64)mem; 
+}
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -309,9 +359,9 @@ int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
+  pte_t *newpte;
   uint64 pa, i;
-  uint flags;
-  char *mem;
+  //uint flags;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,20 +369,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
-    }
+    //flags = PTE_FLAGS(*pte);
+
+    //map the parent’s physical pages into the child 
+    //Clear PTE_W in the PTEs of both child and parent.
+    *pte &= (~PTE_W);
+    *pte |= PTE_COW;
+    newpte = walk(new, i, 1);
+    *newpte = *pte;
+    //Increment a page’s reference count when fork causes a child to share the page
+    incpgcnt(pa);
   }
   return 0;
-
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -356,11 +404,27 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
 
+  //uint64 va = PGROUNDDOWN(dstva); 
+
+  //Modify copyout() to use the same scheme as page faults when it encounters a COW page.
+  // for(uint64 i = va; i < dstva + len; i+=PGSIZE) {
+
+  // }
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    if(check_cow(pagetable, va0)) {
+      if ( !uvmcow(pagetable, va0) ){
+        //myproc()->killed = 1;
+        return -1;  
+      }else {
+        //reload address 
+        pa0 = walkaddr(pagetable, va0);
+      }
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
