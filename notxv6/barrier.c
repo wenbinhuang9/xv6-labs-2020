@@ -6,6 +6,7 @@
 
 static int nthread = 1;
 static int round = 0;
+pthread_mutex_t lock;            // declare a lock
 
 struct barrier {
   pthread_mutex_t barrier_mutex;
@@ -30,7 +31,19 @@ barrier()
   // Block until all threads have called barrier() and
   // then increment bstate.round.
   //
-  
+  pthread_mutex_lock(&bstate.barrier_mutex);       // acquire lock
+  bstate.nthread += 1; 
+  //printf("thread comes in bstate.nthread: %d, nthrad, %d, round:%d\n", bstate.nthread, nthread, bstate.round);
+  if (bstate.nthread == nthread) {
+    bstate.round += 1; 
+    bstate.nthread = 0; 
+    pthread_mutex_unlock(&bstate.barrier_mutex);       // acquire lock
+    pthread_cond_broadcast(&bstate.barrier_cond);     // wake up every thread sleeping on cond
+  }else {
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+    pthread_mutex_unlock(&bstate.barrier_mutex); 
+  }
+
 }
 
 static void *
@@ -53,6 +66,7 @@ thread(void *xa)
 int
 main(int argc, char *argv[])
 {
+  
   pthread_t *tha;
   void *value;
   long i;
@@ -62,6 +76,7 @@ main(int argc, char *argv[])
     fprintf(stderr, "%s: %s nthread\n", argv[0], argv[0]);
     exit(-1);
   }
+  pthread_mutex_init(&lock, NULL); // initialize the lock
   nthread = atoi(argv[1]);
   tha = malloc(sizeof(pthread_t) * nthread);
   srandom(0);
