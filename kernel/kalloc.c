@@ -17,16 +17,21 @@ extern char end[]; // first address after kernel.
 struct run {
   struct run *next;
 };
-
-struct {
+struct km{
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+};
+
+struct km kmarr[NCPU];
+
+void *kalloc_helper(struct km* kmem);
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for (int i = 0; i < NCPU; i++) {
+    initlock(&kmarr[i].lock, "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -34,6 +39,7 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
+
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
@@ -56,10 +62,16 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int cid = cpuid();
+  struct km* kmem = &kmarr[cid]; 
+  pop_off();
+  acquire(&kmem->lock);
+
+  r->next = kmem->freelist;
+  kmem->freelist = r;
+  release(&kmem->lock);
+ 
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,14 +80,42 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+  push_off();
+  int cid = cpuid();
+  pop_off();
+  void* pa = kalloc_helper(&kmarr[cid]);
+
+  if((uint64)pa != 0) {
+    //pop_off();
+    return pa;
+  }else {
+    //steal mem 
+    for(int i = 0; i < NCPU; i ++) {
+      if (cid == i) {
+        continue;
+      }
+      void* pa = kalloc_helper(&kmarr[i]); 
+      if ((uint64)pa != 0 ) {
+       // pop_off();
+        return pa; 
+      }
+    }
+  }
+  //pop_off();
+  return pa; 
+}
+
+void *
+kalloc_helper(struct km* kmem)
+{
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
+  acquire(&kmem->lock);
+  r = kmem->freelist;
   if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+    kmem->freelist = r->next;
 
+  release(&kmem->lock);
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
