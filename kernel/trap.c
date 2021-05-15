@@ -3,8 +3,13 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 #include "proc.h"
 #include "defs.h"
+
+
 
 struct spinlock tickslock;
 uint ticks;
@@ -29,6 +34,47 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+uint64 vmlazyalloc(uint64 va) {
+      //Steal code from uvmalloc() in vm.c, which is what sbrk() calls (via growproc()).
+      // You'll need to call kalloc() and mappages().
+      struct proc* p = myproc();
+      
+      // find vma
+      struct vma* v = p->pvma; 
+      while(v) {
+        if (va >= v->start && va < v->end) {
+          break; 
+        }else {
+          v = v->next;
+        }
+      }
+      if (v == 0) {
+        printf("mmpa pg fault no vma found ");
+        return -1;
+      }
+
+      // find start va ,  assign pa, and update pte
+      uint64 va0 = PGROUNDDOWN(va);
+      char *mem; 
+      mem = kalloc();
+      if(mem == 0){
+        printf("mmap pg fault no mem");
+        return -1;
+      }
+      memset(mem, 0, PGSIZE);
+      if(mappages(p->pagetable, va0, PGSIZE, (uint64)mem, v->pte_flag) != 0){
+        kfree(mem);
+        printf("mmap pg fault mappages fails");
+        return -1; 
+      }
+      // load page by readi
+      struct file* f = v->file;
+      ilock(f->ip);
+      readi(f->ip, 0, (uint64)mem, v->offset + va0 - v->start, PGSIZE);
+      iunlock(f->ip);
+
+      return 0;
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -68,9 +114,27 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    //check whether a fault is a page fault by seeing if r_scause() is 13 or 15 in usertrap().
+    if (r_scause() == 15 || r_scause() == 13) {
+      //r_stval() returns the RISC-V stval register
+      //which contains the virtual address that caused the page fault.
+      uint64 va = r_stval();
+
+      if (vmlazyalloc(va) == -1) {
+        printf("usertrap: lazyalloc failed\n");
+        p->killed = 1;
+      }
+
+      if(p->killed == 1) {
+        exit(-1);
+      }
+
+    }else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
+
   }
 
   if(p->killed)

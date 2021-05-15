@@ -10,6 +10,8 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
+struct vma vma[NVMA];
+
 struct proc *initproc;
 
 int nextpid = 1;
@@ -21,6 +23,19 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+
+struct vma*  alloc_vma() {
+  for(int i = 0; i < NVMA; i ++) {
+    acquire(&vma[i].lock);
+    if (vma[i].length == 0) {
+      return &vma[i];      
+    }else {
+      release(&vma[i].lock);
+    }
+  }
+  printf("no vma \n"); 
+  return 0; 
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -302,6 +317,33 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  // Copy vma 
+  np->pvma = 0;
+  struct vma *pv = p->pvma, *pre = 0; 
+
+  while(pv) {
+    struct vma* nv = alloc_vma();
+
+    nv->start = pv->start;
+    nv->end = pv->end;
+    nv->length = pv->length;
+    nv->prot = pv->prot;
+    nv->flags = pv->flags;
+    nv->offset = pv->offset;
+    nv->pte_flag = pv->pte_flag;
+    nv->file = pv->file;
+    filedup(nv->file);
+    nv->next = 0;
+    if( pre == 0) {
+      np->pvma = nv;
+    }else {
+      pre->next = nv;
+    }
+    pre = nv;
+    release(&nv->lock);
+    pv = pv->next; 
+  }
+
   release(&np->lock);
 
   return pid;
@@ -343,6 +385,13 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // Cloase all vma
+  struct vma* v;
+  while(p->pvma) {
+    v = p->pvma;
+    unmap(v, v->start, v->length, 0);
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
